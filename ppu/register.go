@@ -7,6 +7,7 @@ type Field struct {
 
 type Register struct {
 	fields map[string]Field
+	values map[string]uint16
 	Reg    uint16
 }
 

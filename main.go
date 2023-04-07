@@ -7,12 +7,12 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
-	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"image/color"
 	"log"
 	"strconv"
+	"time"
 )
 
 const (
@@ -28,9 +28,31 @@ type Game struct {
 	emulationRun    bool
 	stepping        bool
 	selectedPalette uint8
+	gameScreen      *ebiten.Image
+}
+
+var controllerKeys = map[ebiten.Key]uint8{
+	ebiten.KeyX:     0x80,
+	ebiten.KeyZ:     0x40,
+	ebiten.KeyA:     0x20,
+	ebiten.KeyS:     0x10,
+	ebiten.KeyUp:    0x08,
+	ebiten.KeyDown:  0x04,
+	ebiten.KeyLeft:  0x02,
+	ebiten.KeyRight: 0x01,
 }
 
 func (g *Game) Update() error {
+	//start := time.Now()
+	pressedKeys := inpututil.AppendPressedKeys(nil)
+	g.nes.controller[0] = 0x00
+	for _, p := range pressedKeys {
+		value, ok := controllerKeys[p]
+		if !ok {
+			continue
+		}
+		g.nes.controller[0] |= value
+	}
 	if g.stepping {
 		for true {
 			g.nes.clock()
@@ -46,62 +68,73 @@ func (g *Game) Update() error {
 		}
 	}
 	if g.emulationRun {
+		//start := time.Now()
+		cpuDuration := time.Duration(0)
+		ppuDuration := time.Duration(0)
 		for true {
-			g.nes.clock()
+			c, p := g.nes.clock()
+			cpuDuration += c
+			ppuDuration += p
 			if g.nes.ppu.frameComplete {
 				break
 			}
 		}
 		g.nes.ppu.frameComplete = false
+		//elapsed := time.Now().Sub(start)
+		//fmt.Printf("CPU time = %s\n", cpuDuration)
+		//fmt.Printf("PPU time = %s\n", ppuDuration)
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyP) {
-		g.selectedPalette++
-		g.selectedPalette &= 0x07
-	}
+	//if inpututil.IsKeyJustPressed(ebiten.KeyP) {
+	//	g.selectedPalette++
+	//	g.selectedPalette &= 0x07
+	//}
 	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 		g.emulationRun = !g.emulationRun
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyR) {
 		g.nes.reset()
 	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyV) {
-		g.stepping = true
-	}
-	if inpututil.IsKeyJustReleased(ebiten.KeyV) {
-		g.stepping = false
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
-		for true {
-			g.nes.clock()
-			if g.nes.cpu.isComplete() {
-				break
-			}
-		}
+	//if inpututil.IsKeyJustPressed(ebiten.KeyV) {
+	//	g.stepping = true
+	//}
+	//if inpututil.IsKeyJustReleased(ebiten.KeyV) {
+	//	g.stepping = false
+	//}
+	//if inpututil.IsKeyJustPressed(ebiten.KeyC) {
+	//	for true {
+	//		g.nes.clock()
+	//		if g.nes.cpu.isComplete() {
+	//			break
+	//		}
+	//	}
+	//
+	//	for true {
+	//		g.nes.clock()
+	//		if !g.nes.cpu.isComplete() {
+	//			break
+	//		}
+	//	}
+	//}
+	//if inpututil.IsKeyJustPressed(ebiten.KeyF) {
+	//	for true {
+	//		g.nes.clock()
+	//		if g.nes.ppu.frameComplete {
+	//			break
+	//		}
+	//	}
+	//
+	//	//for true {
+	//	//	g.nes.clock()
+	//	//	if g.nes.cpu.isComplete() {
+	//	//		break
+	//	//	}
+	//	//}
+	//
+	//	g.nes.ppu.frameComplete = false
+	//}
+	//elapsed := time.Now().Sub(start)
+	//fmt.Printf("Update cycle = %s\n", elapsed)
 
-		for true {
-			g.nes.clock()
-			if !g.nes.cpu.isComplete() {
-				break
-			}
-		}
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyF) {
-		for true {
-			g.nes.clock()
-			if g.nes.ppu.frameComplete {
-				break
-			}
-		}
-
-		//for true {
-		//	g.nes.clock()
-		//	if g.nes.cpu.isComplete() {
-		//		break
-		//	}
-		//}
-
-		g.nes.ppu.frameComplete = false
-	}
 	return nil
 }
 
@@ -255,41 +288,63 @@ func (g *Game) DrawPalette(screen *ebiten.Image, x, y float64, i uint8, palette 
 	screen.DrawImage(&img, op)
 }
 
-func (g *Game) Draw(screen *ebiten.Image) {
-
-	g.DrawRam(screen, 0, 0, 0x0000, 32, 16)
-	g.DrawCode(screen, screenWidth-250, 200, 26, -10)
-	g.DrawCpu(screen, screenWidth-250, 20)
-
-	nSwatchSize := 6
-	for p := uint8(0); p < 8; p++ { // For each palette
-		for s := uint8(0); s < 4; s++ { // For each index
-			vector.DrawFilledRect(screen,
-				float32(5+int(p)*(nSwatchSize*5)+int(s)*nSwatchSize),
-				screenHeight-270, float32(nSwatchSize),
-				float32(nSwatchSize),
-				g.nes.ppu.getColourFromPaletteRam(p, s),
-				false)
-		}
+func (g *Game) DrawOAM(screen *ebiten.Image, x, y int) {
+	for i := 0; i < 26; i++ {
+		oam := &g.nes.ppu.oam[i]
+		s := fmt.Sprintf("%s: (%d, %d) ID: %s AT: %s",
+			numToHex(i, 2), oam.x, oam.y, numToHex(int(oam.id), 2), numToHex(int(oam.attribute), 2))
+		g.DrawString(screen, x, y+(i*24), s, WHITE)
 	}
+}
+
+func (g *Game) Draw(screen *ebiten.Image) {
+	// start := time.Now()
+	//g.DrawString(screen, screenWidth-250, 200, fmt.Sprintf("C: %08b", g.nes.controller), WHITE)
+	//g.DrawRam(screen, 0, 0, 0x0000, 32, 16)
+	//g.DrawCode(screen, screenWidth-250, 200, 26, -10)
+	//g.DrawOAM(screen, screenWidth-250, 250)
+
+	//g.DrawCpu(screen, screenWidth-250, 20)
+
+	//nSwatchSize := 6
+	//for p := uint8(0); p < 8; p++ { // For each palette
+	//	for s := uint8(0); s < 4; s++ { // For each index
+	//		vector.DrawFilledRect(screen,
+	//			float32(5+int(p)*(nSwatchSize*5)+int(s)*nSwatchSize),
+	//			screenHeight-270, float32(nSwatchSize),
+	//			float32(nSwatchSize),
+	//			g.nes.ppu.getColourFromPaletteRam(p, s),
+	//			false)
+	//	}
+	//}
 
 	// Draw selection reticule around selected palette
-	vector.StrokeRect(screen,
-		float32(5+int(g.selectedPalette)*(nSwatchSize*5)-1),
-		screenHeight-270,
-		float32(nSwatchSize*4)+1,
-		float32(nSwatchSize),
-		1,
-		WHITE,
-		false)
+	//vector.StrokeRect(screen,
+	//	float32(5+int(g.selectedPalette)*(nSwatchSize*5)-1),
+	//	screenHeight-270,
+	//	float32(nSwatchSize*4)+1,
+	//	float32(nSwatchSize),
+	//	1,
+	//	WHITE,
+	//	false)
 	//DrawRect(516 + nSelectedPalette * (nSwatchSize * 5) - 1, 339, (nSwatchSize * 4), nSwatchSize, olc::WHITE);
 
-	g.DrawPalette(screen, 5, screenHeight-260, 0, g.selectedPalette)
-	g.DrawPalette(screen, 260+5, screenHeight-260, 1, g.selectedPalette)
-	op := ebiten.DrawImageOptions{}
-	op.GeoM.Translate(200, 0)
-	op.GeoM.Scale(2, 2)
-	screen.DrawImage(g.nes.ppu.sprScreen, &op)
+	//g.DrawPalette(screen, 5, screenHeight-260, 0, g.selectedPalette)
+	//g.DrawPalette(screen, 260+5, screenHeight-260, 1, g.selectedPalette)
+
+	for y := 0; y < 240; y++ {
+		for x := 0; x < 256; x++ {
+			screen.Set(x, y, g.nes.ppu.sprScreen[y][x])
+			//g.gameScreen.Set(x, y, g.nes.ppu.sprScreen[y][x])
+		}
+	}
+	//op := ebiten.DrawImageOptions{}
+	//op.GeoM.Translate(200, 0)
+	//op.GeoM.Scale(2, 2)
+
+	//screen.DrawImage(g.gameScreen, &op)
+	//elapsed := time.Now().Sub(start)
+	//fmt.Printf("Draw cycle = %s\n", elapsed)
 }
 
 func (g *Game) Layout(outsideWidth int, outsideHeight int) (int, int) {
@@ -298,7 +353,7 @@ func (g *Game) Layout(outsideWidth int, outsideHeight int) (int, int) {
 
 func main() {
 
-	cart := NewCartridge("/home/joao/PycharmProjects/nes-emu/ice_climber.nes")
+	cart := NewCartridge("/home/joao/PycharmProjects/nes-emu/smb.nes")
 	cpu := NewCPU()
 	ppu := NewPPU()
 	bus := NewBus(cpu, ppu)
@@ -309,10 +364,12 @@ func main() {
 
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 	ebiten.SetWindowTitle("Filter")
-	ebiten.SetTPS(60)
+	ebiten.SetVsyncEnabled(false)
+	ebiten.SetTPS(ebiten.SyncWithFPS)
 	if err := ebiten.RunGame(&Game{
-		nes:    bus,
-		mapAsm: cpu.disassemble(0x0000, 0xFFFF),
+		nes:        bus,
+		mapAsm:     cpu.disassemble(0x0000, 0xFFFF),
+		gameScreen: ebiten.NewImage(256, 240),
 	}); err != nil {
 		log.Fatal(err)
 	}
