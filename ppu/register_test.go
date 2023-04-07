@@ -6,15 +6,12 @@ import (
 )
 
 func Test8BitsRegister(t *testing.T) {
-	r := Register{
-		fields: map[string]Field{
-			"sprite_overflow": {0, 1},
-			"unused":          {1, 5},
-			"sprite_zero_hit": {6, 1},
-			"vertical_bank":   {7, 1},
-		},
-	}
-
+	r := CreateRegister(map[string]Field{
+		"sprite_overflow": {0, 1},
+		"unused":          {1, 5},
+		"sprite_zero_hit": {6, 1},
+		"vertical_bank":   {7, 1},
+	})
 	assert.Equal(t, uint16(0), r.Reg)
 	r.SetField("vertical_bank", 1)
 	assert.Equal(t, map[string]uint16{
@@ -51,6 +48,15 @@ func Test8BitsRegister(t *testing.T) {
 		"vertical_bank":   1,
 	}, r.allAttributes())
 	assert.Equal(t, uint16(0b10000101), r.Reg)
+
+	r.SetReg(0x00)
+	assert.Equal(t, map[string]uint16{
+		"sprite_overflow": 0,
+		"unused":          0,
+		"sprite_zero_hit": 0,
+		"vertical_bank":   0,
+	}, r.allAttributes())
+	assert.Equal(t, uint16(0b0), r.Reg)
 }
 
 func Test16BitsRegister(t *testing.T) {

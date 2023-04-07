@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/hajimehoshi/ebiten/v2"
+	"image"
 	"image/color"
 	"io"
 	"nes-emu/ppu"
@@ -67,6 +68,8 @@ type ObjectAttributeEntry struct {
 type PPU struct {
 	palScreen       []color.Color
 	sprScreen       [240][256]color.Color
+	gameScreen      *ebiten.Image
+	screenImage     *image.RGBA
 	sprNameTable    [2]*ebiten.Image
 	sprPatternTable [2]*ebiten.Image
 
@@ -186,11 +189,11 @@ func (p *PPU) cpuRead(addr uint16, readOnly bool) uint8 {
 func (p *PPU) cpuWrite(addr uint16, data uint8) {
 	switch addr {
 	case 0x0000:
-		p.control.Reg = uint16(data)
+		p.control.SetReg(uint16(data))
 		p.tramAddr.SetField("nametable_x", p.control.GetField("nametable_x"))
 		p.tramAddr.SetField("nametable_y", p.control.GetField("nametable_y"))
 	case 0x0001:
-		p.mask.Reg = uint16(data)
+		p.mask.SetReg(uint16(data))
 	case 0x0003:
 		p.oamAddr = data
 	case 0x0004:
@@ -209,11 +212,11 @@ func (p *PPU) cpuWrite(addr uint16, data uint8) {
 		}
 	case 0x0006:
 		if p.addressLatch == 0 {
-			p.tramAddr.Reg = ((uint16(data) & 0x3F) << 8) | (p.tramAddr.Reg & 0x00FF)
+			p.tramAddr.SetReg(((uint16(data) & 0x3F) << 8) | (p.tramAddr.Reg & 0x00FF))
 			p.addressLatch = 1
 		} else {
-			p.tramAddr.Reg = (p.tramAddr.Reg & 0xFF00) | uint16(data)
-			p.vramAddr.Reg = p.tramAddr.Reg
+			p.tramAddr.SetReg((p.tramAddr.Reg & 0xFF00) | uint16(data))
+			p.vramAddr.SetReg(p.tramAddr.Reg)
 			p.addressLatch = 0
 		}
 	case 0x0007:
@@ -393,7 +396,9 @@ func (p *PPU) getPatternTable(i uint8, palette uint8) ebiten.Image {
 func NewPPU() *PPU {
 
 	mPPU := &PPU{
-		palScreen: loadPalette(),
+		palScreen:   loadPalette(),
+		gameScreen:  ebiten.NewImage(256, 240),
+		screenImage: image.NewRGBA(image.Rect(0, 0, 256, 240)),
 		//sprScreen: ebiten.NewImage(256, 240),
 		sprNameTable: [2]*ebiten.Image{
 			ebiten.NewImage(256, 240),
@@ -908,6 +913,13 @@ func (p *PPU) clock() {
 		p.scanline++
 		if p.scanline >= 261 {
 			p.scanline = -1
+			for sY := 0; sY < 240; sY++ {
+				for sX := 0; sX < 256; sX++ {
+					p.screenImage.Set(sX, sY, p.sprScreen[sY][sX])
+					//p.gameScreen.Set(sX, sY, p.sprScreen[sY][sX])
+				}
+			}
+
 			p.frameComplete = true
 		}
 	}
@@ -927,9 +939,9 @@ func (p *PPU) reset() {
 	p.bgShifterPatternHi = 0x0000
 	p.bgShifterAttribLo = 0x0000
 	p.bgShifterAttribHi = 0x0000
-	p.status.Reg = 0x00
-	p.mask.Reg = 0x00
-	p.control.Reg = 0x00
-	p.vramAddr.Reg = 0x0000
-	p.tramAddr.Reg = 0x0000
+	p.status.SetReg(0x00)
+	p.mask.SetReg(0x00)
+	p.control.SetReg(0x00)
+	p.vramAddr.SetReg(0x00)
+	p.tramAddr.SetReg(0x00)
 }

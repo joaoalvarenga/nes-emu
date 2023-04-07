@@ -7,6 +7,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"image/color"
@@ -298,51 +299,53 @@ func (g *Game) DrawOAM(screen *ebiten.Image, x, y int) {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	// start := time.Now()
-	//g.DrawString(screen, screenWidth-250, 200, fmt.Sprintf("C: %08b", g.nes.controller), WHITE)
+	msg := fmt.Sprintf(`TPS: %0.2f`, ebiten.ActualTPS())
+	ebitenutil.DebugPrint(screen, msg)
+	//start` := time.Now()
+	g.DrawString(screen, screenWidth-250, 200, fmt.Sprintf("C: %08b", g.nes.controller), WHITE)
 	//g.DrawRam(screen, 0, 0, 0x0000, 32, 16)
 	//g.DrawCode(screen, screenWidth-250, 200, 26, -10)
-	//g.DrawOAM(screen, screenWidth-250, 250)
+	g.DrawOAM(screen, screenWidth-250, 250)
 
-	//g.DrawCpu(screen, screenWidth-250, 20)
+	g.DrawCpu(screen, screenWidth-250, 20)
 
-	//nSwatchSize := 6
-	//for p := uint8(0); p < 8; p++ { // For each palette
-	//	for s := uint8(0); s < 4; s++ { // For each index
-	//		vector.DrawFilledRect(screen,
-	//			float32(5+int(p)*(nSwatchSize*5)+int(s)*nSwatchSize),
-	//			screenHeight-270, float32(nSwatchSize),
-	//			float32(nSwatchSize),
-	//			g.nes.ppu.getColourFromPaletteRam(p, s),
-	//			false)
-	//	}
-	//}
+	nSwatchSize := 6
+	for p := uint8(0); p < 8; p++ { // For each palette
+		for s := uint8(0); s < 4; s++ { // For each index
+			vector.DrawFilledRect(screen,
+				float32(5+int(p)*(nSwatchSize*5)+int(s)*nSwatchSize),
+				screenHeight-270, float32(nSwatchSize),
+				float32(nSwatchSize),
+				g.nes.ppu.getColourFromPaletteRam(p, s),
+				false)
+		}
+	}
 
 	// Draw selection reticule around selected palette
-	//vector.StrokeRect(screen,
-	//	float32(5+int(g.selectedPalette)*(nSwatchSize*5)-1),
-	//	screenHeight-270,
-	//	float32(nSwatchSize*4)+1,
-	//	float32(nSwatchSize),
-	//	1,
-	//	WHITE,
-	//	false)
+	vector.StrokeRect(screen,
+		float32(5+int(g.selectedPalette)*(nSwatchSize*5)-1),
+		screenHeight-270,
+		float32(nSwatchSize*4)+1,
+		float32(nSwatchSize),
+		1,
+		WHITE,
+		false)
 	//DrawRect(516 + nSelectedPalette * (nSwatchSize * 5) - 1, 339, (nSwatchSize * 4), nSwatchSize, olc::WHITE);
 
 	//g.DrawPalette(screen, 5, screenHeight-260, 0, g.selectedPalette)
 	//g.DrawPalette(screen, 260+5, screenHeight-260, 1, g.selectedPalette)
 
-	for y := 0; y < 240; y++ {
-		for x := 0; x < 256; x++ {
-			screen.Set(x, y, g.nes.ppu.sprScreen[y][x])
-			//g.gameScreen.Set(x, y, g.nes.ppu.sprScreen[y][x])
-		}
-	}
-	//op := ebiten.DrawImageOptions{}
-	//op.GeoM.Translate(200, 0)
-	//op.GeoM.Scale(2, 2)
+	//for y := 0; y < 240; y++ {
+	//	for x := 0; x < 256; x++ {
+	//		screen.Set(x, y, g.nes.ppu.sprScreen[y][x])
+	//		//g.gameScreen.Set(x, y, g.nes.ppu.sprScreen[y][x])
+	//	}
+	//}
+	op := ebiten.DrawImageOptions{}
+	op.GeoM.Translate(200, 0)
+	op.GeoM.Scale(2, 2)
 
-	//screen.DrawImage(g.gameScreen, &op)
+	screen.DrawImage(g.nes.ppu.gameScreen, &op)
 	//elapsed := time.Now().Sub(start)
 	//fmt.Printf("Draw cycle = %s\n", elapsed)
 }
