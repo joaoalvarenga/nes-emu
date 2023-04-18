@@ -1,23 +1,27 @@
 package main
 
 import (
-	"time"
 	"unsafe"
 )
 
 type Bus struct {
-	systemClockCounter uint8
-	cpuRam             []uint8
-	cpu                *CPU
-	ppu                *PPU
-	cartridge          *Cartridge
-	controllerState    [2]uint8
-	controller         [2]uint8
-	dmaPage            uint8
-	dmaAddr            uint8
-	dmaData            uint8
-	dmaTransfer        bool
-	dmaDummy           bool
+	systemClockCounter       uint8
+	cpuRam                   []uint8
+	apu                      *APU
+	cpu                      *CPU
+	ppu                      *PPU
+	cartridge                *Cartridge
+	controllerState          [2]uint8
+	controller               [2]uint8
+	dmaPage                  uint8
+	dmaAddr                  uint8
+	dmaData                  uint8
+	dmaTransfer              bool
+	dmaDummy                 bool
+	AudioSample              chan float32
+	AudioTimePerSystemSample float32
+	AudioTimePerNESClock     float32
+	audioTime                float32
 }
 
 func (b *Bus) cpuWrite(addr uint16, data uint8) {
@@ -28,6 +32,8 @@ func (b *Bus) cpuWrite(addr uint16, data uint8) {
 		b.cpuRam[addr&0x07FF] = data
 	} else if addr >= 0x2000 && addr <= 0x3FFF {
 		b.ppu.cpuWrite(addr&0x0007, data)
+	} else if (addr >= 0x4000 && addr <= 0x4013) || addr == 0x4015 || addr == 0x4017 {
+		b.apu.cpuWrite(addr, data)
 	} else if addr == 0x4014 {
 		b.dmaPage = data
 		b.dmaAddr = 0x00
@@ -71,12 +77,19 @@ func (b *Bus) reset() {
 	b.dmaAddr = 0
 }
 
-func (b *Bus) clock() (time.Duration, time.Duration) {
-	cpuDuration := time.Duration(0)
-	ppuDuration := time.Duration(0)
+func (b *Bus) SetSampleFrequency(sampleRate uint32) {
+	b.AudioTimePerSystemSample = 1.0 / float32(sampleRate)
+	b.AudioTimePerNESClock = 1.0 / 5369318.0 // PPU Clock Frequency
+}
+
+func (b *Bus) clock() bool {
+	//cpuDuration := time.Duration(0)
+	//ppuDuration := time.Duration(0)
 
 	//start := time.Now()
 	b.ppu.clock()
+
+	b.apu.clock()
 	//ppuDuration = time.Now().Sub(start)
 
 	if b.systemClockCounter%3 == 0 {
@@ -109,26 +122,41 @@ func (b *Bus) clock() (time.Duration, time.Duration) {
 		}
 	}
 
+	// Synchronising with audio
+	audioSampleReady := false
+	b.audioTime += b.AudioTimePerNESClock
+	if b.audioTime >= b.AudioTimePerSystemSample {
+		b.audioTime -= b.AudioTimePerSystemSample
+		select {
+		case b.AudioSample <- b.apu.getOutputSample():
+		default:
+		}
+		audioSampleReady = true
+	}
+
 	if b.ppu.nmi {
 		b.ppu.nmi = false
 		b.cpu.nmi()
 	}
 
 	b.systemClockCounter++
-	return cpuDuration, ppuDuration
+	//return cpuDuration, ppuDuration
+	return audioSampleReady
 }
 
-func NewBus(cpu *CPU, ppu *PPU) *Bus {
+func NewBus(cpu *CPU, ppu *PPU, apu *APU) *Bus {
 	bus := &Bus{
 		systemClockCounter: 0,
 		cpuRam:             make([]uint8, 2048),
 		cpu:                cpu,
 		ppu:                ppu,
+		apu:                apu,
 		dmaDummy:           true,
 		dmaTransfer:        false,
 		dmaAddr:            0,
 		dmaPage:            0,
 		dmaData:            0,
+		AudioSample:        make(chan float32, 44100),
 	}
 	return bus
 }

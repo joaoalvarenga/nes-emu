@@ -3,7 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/hajimehoshi/ebiten/v2"
+	"nes-emu/mapper"
+	"sync"
+
+	//"github.com/hajimehoshi/ebiten/v2"
 	"image"
 	"image/color"
 	"io"
@@ -68,10 +71,10 @@ type ObjectAttributeEntry struct {
 type PPU struct {
 	palScreen       []color.Color
 	sprScreen       [240][256]color.Color
-	gameScreen      *ebiten.Image
+	gameScreen      *image.RGBA
 	screenImage     *image.RGBA
-	sprNameTable    [2]*ebiten.Image
-	sprPatternTable [2]*ebiten.Image
+	sprNameTable    [2]*image.RGBA
+	sprPatternTable [2]*image.RGBA
 
 	tableName    [2][1024]uint8
 	tablePattern [2][4096]uint8
@@ -114,6 +117,7 @@ type PPU struct {
 
 	spriteZeroHitPossible   bool
 	spriteZeroBeingRendered bool
+	outputLock              sync.Mutex
 }
 
 func (p *PPU) connectCartridge(cartridge *Cartridge) {
@@ -242,7 +246,7 @@ func (p *PPU) ppuRead(addr uint16, readOnly bool) uint8 {
 
 	if addr >= 0x2000 && addr <= 0x3EFF {
 		addr &= 0x0FFF
-		if p.cartridge.mirror == VERTICAL {
+		if p.cartridge.Mirror() == mapper.VERTICAL {
 			// Vertical
 			if addr >= 0x0000 && addr <= 0x03FF {
 				data = p.tableName[0][addr&0x03FF]
@@ -259,7 +263,7 @@ func (p *PPU) ppuRead(addr uint16, readOnly bool) uint8 {
 			return data
 		}
 
-		if p.cartridge.mirror == HORIZONTAL {
+		if p.cartridge.Mirror() == mapper.HORIZONTAL {
 			// Horizontal
 			if addr >= 0x0000 && addr <= 0x03FF {
 				data = p.tableName[0][addr&0x03FF]
@@ -312,7 +316,7 @@ func (p *PPU) ppuWrite(addr uint16, data uint8) {
 	}
 	if addr >= 0x2000 && addr <= 0x3EFF {
 		addr &= 0x0FFF
-		if p.cartridge.mirror == VERTICAL {
+		if p.cartridge.Mirror() == mapper.VERTICAL {
 			// Vertical
 			if addr >= 0x0000 && addr <= 0x03FF {
 				p.tableName[0][addr&0x03FF] = data
@@ -328,7 +332,7 @@ func (p *PPU) ppuWrite(addr uint16, data uint8) {
 			}
 			return
 		}
-		if p.cartridge.mirror == HORIZONTAL {
+		if p.cartridge.Mirror() == mapper.HORIZONTAL {
 			// Horizontal
 			if addr >= 0x0000 && addr <= 0x03FF {
 				p.tableName[0][addr&0x03FF] = data
@@ -369,7 +373,7 @@ func (p *PPU) getColourFromPaletteRam(palette uint8, pixel uint8) color.Color {
 	//return color.White
 }
 
-func (p *PPU) getPatternTable(i uint8, palette uint8) ebiten.Image {
+func (p *PPU) getPatternTable(i uint8, palette uint8) image.RGBA {
 	for tileY := uint16(0); tileY < 16; tileY++ {
 		for tileX := uint16(0); tileX < 16; tileX++ {
 			offset := tileY*256 + tileX*16
@@ -393,20 +397,20 @@ func (p *PPU) getPatternTable(i uint8, palette uint8) ebiten.Image {
 	return *(p.sprPatternTable[i])
 }
 
-func NewPPU() *PPU {
+func NewPPU(lock sync.Mutex) *PPU {
 
 	mPPU := &PPU{
 		palScreen:   loadPalette(),
-		gameScreen:  ebiten.NewImage(256, 240),
+		gameScreen:  image.NewRGBA(image.Rect(0, 0, 256, 240)),
 		screenImage: image.NewRGBA(image.Rect(0, 0, 256, 240)),
 		//sprScreen: ebiten.NewImage(256, 240),
-		sprNameTable: [2]*ebiten.Image{
-			ebiten.NewImage(256, 240),
-			ebiten.NewImage(256, 240),
+		sprNameTable: [2]*image.RGBA{
+			image.NewRGBA(image.Rect(0, 0, 256, 240)),
+			image.NewRGBA(image.Rect(0, 0, 256, 240)),
 		},
-		sprPatternTable: [2]*ebiten.Image{
-			ebiten.NewImage(128, 128),
-			ebiten.NewImage(128, 128),
+		sprPatternTable: [2]*image.RGBA{
+			image.NewRGBA(image.Rect(0, 0, 128, 128)),
+			image.NewRGBA(image.Rect(0, 0, 128, 128)),
 		},
 		control:            CreateControlRegister(),
 		mask:               CreateMaskRegister(),
@@ -428,6 +432,7 @@ func NewPPU() *PPU {
 		addressLatch:       0,
 		ppuDataBuffer:      0,
 		nmi:                false,
+		outputLock:         lock,
 	}
 	mPPU.oamPtr = unsafe.Pointer(&(mPPU.oam[0]))
 	for y := 0; y < 240; y++ {
@@ -913,12 +918,14 @@ func (p *PPU) clock() {
 		p.scanline++
 		if p.scanline >= 261 {
 			p.scanline = -1
+			p.outputLock.Lock()
 			for sY := 0; sY < 240; sY++ {
 				for sX := 0; sX < 256; sX++ {
 					p.screenImage.Set(sX, sY, p.sprScreen[sY][sX])
 					//p.gameScreen.Set(sX, sY, p.sprScreen[sY][sX])
 				}
 			}
+			p.outputLock.Unlock()
 
 			p.frameComplete = true
 		}

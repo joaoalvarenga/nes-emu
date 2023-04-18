@@ -2,379 +2,238 @@ package main
 
 import (
 	"fmt"
-	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
-	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
-	"github.com/hajimehoshi/ebiten/v2/vector"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/opentype"
-	"image/color"
+	"github.com/alexflint/go-arg"
+	"github.com/go-gl/gl/all-core/gl"
+	"github.com/go-gl/glfw/v3.3/glfw"
+	"github.com/gordonklaus/portaudio"
+	"github.com/nullboundary/glfont"
+	"image"
 	"log"
+	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
-const (
-	screenWidth  = 1280
-	screenHeight = 900
-)
-
-type Game struct {
-	nes             *Bus
-	keys            []ebiten.Key
-	mapAsm          map[uint16]DissambledInstruction
-	defaultFont     font.Face
-	emulationRun    bool
-	stepping        bool
-	selectedPalette uint8
-	gameScreen      *ebiten.Image
-}
-
-var controllerKeys = map[ebiten.Key]uint8{
-	ebiten.KeyX:     0x80,
-	ebiten.KeyZ:     0x40,
-	ebiten.KeyA:     0x20,
-	ebiten.KeyS:     0x10,
-	ebiten.KeyUp:    0x08,
-	ebiten.KeyDown:  0x04,
-	ebiten.KeyLeft:  0x02,
-	ebiten.KeyRight: 0x01,
-}
-
-func (g *Game) Update() error {
-	//start := time.Now()
-	pressedKeys := inpututil.AppendPressedKeys(nil)
-	g.nes.controller[0] = 0x00
-	for _, p := range pressedKeys {
-		value, ok := controllerKeys[p]
-		if !ok {
-			continue
-		}
-		g.nes.controller[0] |= value
-	}
-	if g.stepping {
-		for true {
-			g.nes.clock()
-			if g.nes.cpu.isComplete() {
-				break
-			}
-		}
-		for true {
-			g.nes.clock()
-			if !g.nes.cpu.isComplete() {
-				break
-			}
-		}
-	}
-	if g.emulationRun {
-		//start := time.Now()
-		cpuDuration := time.Duration(0)
-		ppuDuration := time.Duration(0)
-		for true {
-			c, p := g.nes.clock()
-			cpuDuration += c
-			ppuDuration += p
-			if g.nes.ppu.frameComplete {
-				break
-			}
-		}
-		g.nes.ppu.frameComplete = false
-		//elapsed := time.Now().Sub(start)
-		//fmt.Printf("CPU time = %s\n", cpuDuration)
-		//fmt.Printf("PPU time = %s\n", ppuDuration)
-	}
-	//if inpututil.IsKeyJustPressed(ebiten.KeyP) {
-	//	g.selectedPalette++
-	//	g.selectedPalette &= 0x07
-	//}
-	if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-		g.emulationRun = !g.emulationRun
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyR) {
-		g.nes.reset()
-	}
-	//if inpututil.IsKeyJustPressed(ebiten.KeyV) {
-	//	g.stepping = true
-	//}
-	//if inpututil.IsKeyJustReleased(ebiten.KeyV) {
-	//	g.stepping = false
-	//}
-	//if inpututil.IsKeyJustPressed(ebiten.KeyC) {
-	//	for true {
-	//		g.nes.clock()
-	//		if g.nes.cpu.isComplete() {
-	//			break
-	//		}
-	//	}
-	//
-	//	for true {
-	//		g.nes.clock()
-	//		if !g.nes.cpu.isComplete() {
-	//			break
-	//		}
-	//	}
-	//}
-	//if inpututil.IsKeyJustPressed(ebiten.KeyF) {
-	//	for true {
-	//		g.nes.clock()
-	//		if g.nes.ppu.frameComplete {
-	//			break
-	//		}
-	//	}
-	//
-	//	//for true {
-	//	//	g.nes.clock()
-	//	//	if g.nes.cpu.isComplete() {
-	//	//		break
-	//	//	}
-	//	//}
-	//
-	//	g.nes.ppu.frameComplete = false
-	//}
-	//elapsed := time.Now().Sub(start)
-	//fmt.Printf("Update cycle = %s\n", elapsed)
-
-	return nil
-}
+const padding = 0
 
 func numToHex(n int, d int) string {
 	format := "%0" + strconv.Itoa(d) + "x"
 	return fmt.Sprintf(format, n)
 }
 
-func (g *Game) getDefaultFont() font.Face {
-	if g.defaultFont != nil {
-		return g.defaultFont
+func createTexture() uint32 {
+	var texture uint32
+	gl.GenTextures(1, &texture)
+	gl.BindTexture(gl.TEXTURE_2D, texture)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+	return texture
+}
+
+func setTexture(im *image.RGBA) {
+	size := im.Rect.Size()
+	gl.TexImage2D(
+		gl.TEXTURE_2D, 0, gl.RGBA, int32(size.X), int32(size.Y),
+		0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(im.Pix))
+}
+
+func drawBuffer(window *glfw.Window) {
+	w, h := window.GetFramebufferSize()
+	s1 := float32(w) / 256
+	s2 := float32(h) / 240
+	f := float32(1 - padding)
+	var x, y float32
+	if s1 >= s2 {
+		x = f * s2 / s1
+		y = f
+	} else {
+		x = f
+		y = f * s1 / s2
 	}
-	tt, err := opentype.Parse(fonts.MPlus1pRegular_ttf)
+	gl.Begin(gl.QUADS)
+	gl.TexCoord2f(0, 1)
+	gl.Vertex2f(-x, -y)
+	gl.TexCoord2f(1, 1)
+	gl.Vertex2f(x, -y)
+	gl.TexCoord2f(1, 0)
+	gl.Vertex2f(x, y)
+	gl.TexCoord2f(0, 0)
+	gl.Vertex2f(-x, y)
+	gl.End()
+}
+
+func init() {
+	// we need a parallel OS thread to avoid audio stuttering
+	runtime.GOMAXPROCS(2)
+
+	// we need to keep OpenGL calls on a single thread
+	runtime.LockOSThread()
+}
+
+var controllerKeys = map[glfw.Key]uint8{
+	glfw.KeyX:     0x80,
+	glfw.KeyZ:     0x40,
+	glfw.KeyA:     0x20,
+	glfw.KeyS:     0x10,
+	glfw.KeyUp:    0x08,
+	glfw.KeyDown:  0x04,
+	glfw.KeyLeft:  0x02,
+	glfw.KeyRight: 0x01,
+}
+
+type Game struct {
+	window        *glfw.Window
+	screenTexture uint32
+	nes           *Bus
+	defaultFont   *glfont.Font
+	start         time.Time
+	lock          sync.Mutex
+}
+
+func (g *Game) keyboardCallback(window *glfw.Window, key glfw.Key, scancode int,
+	action glfw.Action, mods glfw.ModifierKey) {
+	switch action {
+	case glfw.Release:
+		value, ok := controllerKeys[key]
+		if ok {
+			g.nes.controller[0] &= ^value
+		}
+	case glfw.Press:
+		value, ok := controllerKeys[key]
+		if ok {
+			g.nes.controller[0] |= value
+		}
+		if key == glfw.KeyR {
+			g.nes.reset()
+		}
+	}
+}
+
+func NewGame(nes *Bus, lock sync.Mutex) *Game {
+	// initialize glfw
+	game := &Game{nes: nes, lock: lock}
+
+	// create window
+	glfw.WindowHint(glfw.ContextVersionMajor, 2)
+	glfw.WindowHint(glfw.ContextVersionMinor, 1)
+	window, err := glfw.CreateWindow(1920, 1080, "NES Emulator", nil, nil)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln(err)
 	}
-	const dpi = 72 * 2
-	mplusNormalFont, err := opentype.NewFace(tt, &opentype.FaceOptions{
-		Size:    8,
-		DPI:     dpi,
-		Hinting: font.HintingNone,
-	})
+	game.window = window
+	game.window.MakeContextCurrent()
+	glfw.SwapInterval(1)
+	game.window.SetKeyCallback(game.keyboardCallback)
 
+	// initialize gl
+	if err := gl.Init(); err != nil {
+		log.Fatalln(err)
+	}
+	gl.Enable(gl.TEXTURE_2D)
+	gl.Disable(gl.DEPTH_TEST)
+	gl.Disable(gl.LIGHTING)
+
+	game.screenTexture = createTexture()
+	game.defaultFont, err = glfont.LoadFont("Minecraft.ttf", int32(52), 1920, 1080)
 	if err != nil {
-		log.Fatal(err)
+		log.Panicf("LoadFont: %v", err)
 	}
-	g.defaultFont = mplusNormalFont
-	return g.defaultFont
+	return game
 }
 
-func (g *Game) DrawCode(screen *ebiten.Image, x int, y int, nLines int, offset int) {
-	itA, ok := g.mapAsm[g.nes.cpu.pc]
-	if !ok {
-		return
-	}
-	lineSize := 24
-	lineY := y + (nLines>>1)*lineSize
-
-	text.Draw(screen, itA.instruction, g.getDefaultFont(), x, lineY, color.RGBA{R: 0x00, G: 0xFF, B: 0xFF, A: 0xFF})
-	for lineY < (y + (nLines * lineSize)) {
-		lineY += lineSize
-		itA, ok = g.mapAsm[itA.nextAddr]
-		if !ok {
-			break
-		}
-		text.Draw(screen, itA.instruction, g.getDefaultFont(), x, lineY, color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF})
-	}
-
-	itA = g.mapAsm[g.nes.cpu.pc]
-	lineY = y + (nLines>>1)*lineSize
-	for lineY > y {
-		lineY -= lineSize
-		itA, ok = g.mapAsm[itA.previousAddr]
-		if !ok {
-			break
-		}
-		text.Draw(screen, itA.instruction, g.getDefaultFont(), x, lineY, color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF})
-	}
+func (g *Game) Draw() {
+	frameDuration := time.Now().Sub(g.start)
+	gl.BindTexture(gl.TEXTURE_2D, g.screenTexture)
+	g.lock.Lock()
+	setTexture(g.nes.ppu.screenImage)
+	g.lock.Unlock()
+	drawBuffer(g.window)
+	gl.BindTexture(gl.TEXTURE_2D, 0)                                                   //r,g,b,a font color
+	g.defaultFont.Printf(0, 100, 1.0, "FPS: %f", 1.0/float64(frameDuration.Seconds())) //x,y,scale,string,printf args
+	// Do OpenGL stuff.
+	g.window.SwapBuffers()
+	glfw.PollEvents()
+	g.start = time.Now()
 }
 
-func (g *Game) DrawRam(screen *ebiten.Image, x int, y int, nAddr uint16, nRows int, nColumns int) {
-	for row := 0; row < nRows; row++ {
-		sOffset := fmt.Sprintf("%s:", numToHex(int(nAddr), 4))
-		for col := 0; col < nColumns; col++ {
-			sOffset = fmt.Sprintf("%s %s", sOffset, numToHex(int(g.nes.cpuRead(nAddr, true)), 2))
-			nAddr += 1
-		}
-		ebitenutil.DebugPrintAt(screen, sOffset, x, y)
-		y += 16
-	}
-}
-
-var (
-	WHITE = color.RGBA{R: 0xFF, G: 0xFF, B: 0xFF, A: 0xFF}
-	GREEN = color.RGBA{G: 0xFF, A: 0xFF}
-	RED   = color.RGBA{R: 0xFF, A: 0xFF}
-)
-
-func (g *Game) DrawString(screen *ebiten.Image, x int, y int, str string, clr color.RGBA) {
-	text.Draw(screen, str, g.getDefaultFont(), x, y, clr)
-}
-
-func (g *Game) DrawCpu(screen *ebiten.Image, x int, y int) {
-	g.DrawString(screen, x, y, "STATUS: ", WHITE)
-	titleOffset := 70
-	statusOffset := 10
-	statusColor := RED
-	if g.nes.cpu.getFlag(N) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset, y, "N", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(V) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*1), y, "V", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(U) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*2), y, "U", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(B) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*3), y, "B", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(D) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*4), y, "D", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(I) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*5), y, "I", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(Z) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*6), y, "Z", statusColor)
-	statusColor = RED
-
-	if g.nes.cpu.getFlag(C) == 1 {
-		statusColor = GREEN
-	}
-	g.DrawString(screen, x+titleOffset+(statusOffset*7), y, "C", statusColor)
-	statusColor = RED
-
-	lineSize := 24
-	g.DrawString(screen, x, y+lineSize, fmt.Sprintf("PC: $%s", numToHex(int(g.nes.cpu.pc), 4)), WHITE)
-	g.DrawString(screen, x, y+(lineSize*2), fmt.Sprintf("A: $%s", numToHex(int(g.nes.cpu.accumulator), 2)), WHITE)
-	g.DrawString(screen, x, y+(lineSize*3), fmt.Sprintf("X: $%s", numToHex(int(g.nes.cpu.xRegister), 2)), WHITE)
-	g.DrawString(screen, x, y+(lineSize*4), fmt.Sprintf("Y: $%s", numToHex(int(g.nes.cpu.yRegister), 2)), WHITE)
-	g.DrawString(screen, x, y+(lineSize*5), fmt.Sprintf("Stack P: $%s", numToHex(int(g.nes.cpu.stkp), 4)), WHITE)
-	g.DrawString(screen, x, y+(lineSize*6), fmt.Sprintf("Cycles: %d Scanlines: %d", g.nes.ppu.cycle, g.nes.ppu.scanline), WHITE)
-}
-
-func (g *Game) DrawPalette(screen *ebiten.Image, x, y float64, i uint8, palette uint8) {
-	op := &ebiten.DrawImageOptions{}
-
-	op.GeoM.Scale(2, 2)
-	op.GeoM.Translate(x, y)
-	img := g.nes.ppu.getPatternTable(i, palette)
-	screen.DrawImage(&img, op)
-}
-
-func (g *Game) DrawOAM(screen *ebiten.Image, x, y int) {
-	for i := 0; i < 26; i++ {
-		oam := &g.nes.ppu.oam[i]
-		s := fmt.Sprintf("%s: (%d, %d) ID: %s AT: %s",
-			numToHex(i, 2), oam.x, oam.y, numToHex(int(oam.id), 2), numToHex(int(oam.attribute), 2))
-		g.DrawString(screen, x, y+(i*24), s, WHITE)
-	}
-}
-
-func (g *Game) Draw(screen *ebiten.Image) {
-	msg := fmt.Sprintf(`TPS: %0.2f`, ebiten.ActualTPS())
-	ebitenutil.DebugPrint(screen, msg)
-	//start` := time.Now()
-	g.DrawString(screen, screenWidth-250, 200, fmt.Sprintf("C: %08b", g.nes.controller), WHITE)
-	//g.DrawRam(screen, 0, 0, 0x0000, 32, 16)
-	//g.DrawCode(screen, screenWidth-250, 200, 26, -10)
-	g.DrawOAM(screen, screenWidth-250, 250)
-
-	g.DrawCpu(screen, screenWidth-250, 20)
-
-	nSwatchSize := 6
-	for p := uint8(0); p < 8; p++ { // For each palette
-		for s := uint8(0); s < 4; s++ { // For each index
-			vector.DrawFilledRect(screen,
-				float32(5+int(p)*(nSwatchSize*5)+int(s)*nSwatchSize),
-				screenHeight-270, float32(nSwatchSize),
-				float32(nSwatchSize),
-				g.nes.ppu.getColourFromPaletteRam(p, s),
-				false)
-		}
-	}
-
-	// Draw selection reticule around selected palette
-	vector.StrokeRect(screen,
-		float32(5+int(g.selectedPalette)*(nSwatchSize*5)-1),
-		screenHeight-270,
-		float32(nSwatchSize*4)+1,
-		float32(nSwatchSize),
-		1,
-		WHITE,
-		false)
-	//DrawRect(516 + nSelectedPalette * (nSwatchSize * 5) - 1, 339, (nSwatchSize * 4), nSwatchSize, olc::WHITE);
-
-	//g.DrawPalette(screen, 5, screenHeight-260, 0, g.selectedPalette)
-	//g.DrawPalette(screen, 260+5, screenHeight-260, 1, g.selectedPalette)
-
-	//for y := 0; y < 240; y++ {
-	//	for x := 0; x < 256; x++ {
-	//		screen.Set(x, y, g.nes.ppu.sprScreen[y][x])
-	//		//g.gameScreen.Set(x, y, g.nes.ppu.sprScreen[y][x])
-	//	}
-	//}
-	op := ebiten.DrawImageOptions{}
-	op.GeoM.Translate(200, 0)
-	op.GeoM.Scale(2, 2)
-
-	screen.DrawImage(g.nes.ppu.gameScreen, &op)
-	//elapsed := time.Now().Sub(start)
-	//fmt.Printf("Draw cycle = %s\n", elapsed)
-}
-
-func (g *Game) Layout(outsideWidth int, outsideHeight int) (int, int) {
-	return screenWidth, screenHeight
+var args struct {
+	Rom string
 }
 
 func main() {
-
-	cart := NewCartridge("/home/joao/PycharmProjects/nes-emu/smb.nes")
+	arg.MustParse(&args)
+	var mu sync.Mutex
+	cart := NewCartridge(args.Rom)
 	cpu := NewCPU()
-	ppu := NewPPU()
-	bus := NewBus(cpu, ppu)
-	cpu.connectBus(bus)
-	bus.insertCartridge(cart)
+	ppu := NewPPU(mu)
+	apu := NewAPU()
+	nes := NewBus(cpu, ppu, apu)
+	cpu.connectBus(nes)
+	nes.insertCartridge(cart)
+	nes.reset()
 
-	bus.reset()
+	err := glfw.Init()
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer glfw.Terminate()
+	game := NewGame(nes, mu)
+	game.start = time.Now()
+	game.defaultFont.SetColor(1.0, 1.0, 1.0, 1.0)
 
-	ebiten.SetWindowSize(screenWidth, screenHeight)
-	ebiten.SetWindowTitle("Filter")
-	ebiten.SetVsyncEnabled(false)
-	ebiten.SetTPS(ebiten.SyncWithFPS)
-	if err := ebiten.RunGame(&Game{
-		nes:        bus,
-		mapAsm:     cpu.disassemble(0x0000, 0xFFFF),
-		gameScreen: ebiten.NewImage(256, 240),
-	}); err != nil {
-		log.Fatal(err)
+	portaudio.Initialize()
+	defer portaudio.Terminate()
+	//host, err := portaudio.DefaultHostApi()
+	if err != nil {
+		panic(err)
+	}
+	//parameters := portaudio.HighLatencyParameters(nil, host.DefaultOutputDevice)
+	//start := time.Now()
+	callback := func(out []float32) {
+		//dur := time.Now().Sub(start)
+		//fmt.Printf("Audio FPS %s\n", dur)
+		//
+		//start = time.Now()
+
+		output := float32(0)
+
+		for i := range out {
+			if i%1 == 0 {
+				select {
+				case sample := <-nes.AudioSample:
+					output = sample
+				default:
+					output = 0
+				}
+			}
+			out[i] = output
+		}
+	}
+	nes.SetSampleFrequency(uint32(44100))
+	stream, err := portaudio.OpenDefaultStream(0, 1, 44100, 0, callback)
+
+	if err != nil {
+		panic(err)
+	}
+	if err := stream.Start(); err != nil {
+		panic(err)
 	}
 
+	for !game.window.ShouldClose() {
+		gl.Clear(gl.COLOR_BUFFER_BIT)
+
+		for true {
+			nes.clock()
+			if nes.ppu.frameComplete {
+				break
+			}
+		}
+		nes.ppu.frameComplete = false
+		game.Draw()
+	}
+	stream.Close()
 }

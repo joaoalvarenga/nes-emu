@@ -50,3 +50,14 @@ func (m Mapper0000) PpuMapWrite(addr uint16, mappedAddr *uint32, data uint8) boo
 func (m Mapper0000) Reset() {
 
 }
+
+func (m Mapper0000) Mirror() MIRROR {
+	return HARDWARE
+}
+func (m Mapper0000) irqState() bool {
+	return false
+}
+func (m Mapper0000) irqClear() {
+}
+func (m Mapper0000) scanline() {
+}
